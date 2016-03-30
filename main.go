@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -63,6 +64,8 @@ func onData(c mqtt.Client, msg mqtt.Message) {
 	switch rxPL.FPort {
 	case 1:
 		handleAirQuality(rxPL)
+	case 2:
+		handleTemperature(rxPL)
 	default:
 		log.Printf("unknown FPort: %d", rxPL.FPort)
 	}
@@ -85,6 +88,35 @@ func handleAirQuality(rxPL loraserver.RXPayload) {
 		"quality": quality,
 	}
 	pt, err := client.NewPoint("air_quality", tags, fields, time.Now())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	bp.AddPoint(pt)
+
+	if err := influxClient.Write(bp); err != nil {
+		log.Println(err)
+	}
+}
+
+func handleTemperature(rxPL loraserver.RXPayload) {
+	tempint := binary.LittleEndian.Uint32(rxPL.Data)
+	tempFloat := math.Float32frombits(tempint)
+	log.Println("temperature: %f", tempFloat)
+
+	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
+		Database:  "sensors",
+		Precision: "s",
+	})
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	tags := map[string]string{"devEUI": rxPL.DevEUI.String()}
+	fields := map[string]interface{}{
+		"celcius": tempFloat,
+	}
+	pt, err := client.NewPoint("temperature", tags, fields, time.Now())
 	if err != nil {
 		log.Println(err)
 		return
