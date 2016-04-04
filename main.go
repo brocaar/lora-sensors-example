@@ -102,7 +102,7 @@ func handleAirQuality(rxPL loraserver.RXPayload) {
 func handleTemperature(rxPL loraserver.RXPayload) {
 	tempint := binary.LittleEndian.Uint32(rxPL.Data)
 	tempFloat := math.Float32frombits(tempint)
-	log.Println("temperature: %f", tempFloat)
+	log.Printf("temperature: %f", tempFloat)
 
 	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
 		Database:  "sensors",
