@@ -5,22 +5,33 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	"github.com/brocaar/loraserver"
+	"github.com/brocaar/loraserver/models"
 	"github.com/codegangsta/cli"
 	"github.com/eclipse/paho.mqtt.golang"
-	"github.com/influxdata/influxdb/client/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-var influxClient client.Client
+var (
+	temp = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "lora_sensor_temperature_celsius",
+		Help: "Current temperature in C",
+	})
+
+	airq = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "lora_sensor_airquality",
+		Help: "Current air quality",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(temp)
+	prometheus.MustRegister(airq)
+}
 
 func run(c *cli.Context) {
-	var err error
-
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(c.String("mqtt-server"))
 	opts.SetUsername(c.String("mqtt-username"))
@@ -32,30 +43,19 @@ func run(c *cli.Context) {
 		log.Fatal(token.Error())
 	}
 
-	// Make client
-	influxClient, err = client.NewHTTPClient(client.HTTPConfig{
-		Addr:     c.String("influx-url"),
-		Username: c.String("influx-user"),
-		Password: c.String("influx-password"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	sigChan := make(chan os.Signal)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	log.Println(<-sigChan)
+	http.Handle("/metrics", prometheus.Handler())
+	http.ListenAndServe(":8080", nil)
 }
 
 func onConnected(c mqtt.Client) {
 	log.Println("connected to mqtt server")
-	if token := c.Subscribe("application/0101010101010101/node/+/rx", 0, onData); token.Wait() && token.Error() != nil {
+	if token := c.Subscribe("application/0101010101010101/node/0202020202020202/rx", 0, onData); token.Wait() && token.Error() != nil {
 		log.Fatal(token.Error())
 	}
 }
 
 func onData(c mqtt.Client, msg mqtt.Message) {
-	var rxPL loraserver.RXPayload
+	var rxPL models.RXPayload
 	if err := json.Unmarshal(msg.Payload(), &rxPL); err != nil {
 		log.Println(err)
 		return
@@ -71,61 +71,18 @@ func onData(c mqtt.Client, msg mqtt.Message) {
 	}
 }
 
-func handleAirQuality(rxPL loraserver.RXPayload) {
+func handleAirQuality(rxPL models.RXPayload) {
 	quality := binary.LittleEndian.Uint16(rxPL.Data)
 	log.Printf("air-quality: %d", quality)
+	airq.Set(float64(quality))
 
-	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
-		Database:  "sensors",
-		Precision: "s",
-	})
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	tags := map[string]string{"devEUI": rxPL.DevEUI.String()}
-	fields := map[string]interface{}{
-		"quality": quality,
-	}
-	pt, err := client.NewPoint("air_quality", tags, fields, time.Now())
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	bp.AddPoint(pt)
-
-	if err := influxClient.Write(bp); err != nil {
-		log.Println(err)
-	}
 }
 
-func handleTemperature(rxPL loraserver.RXPayload) {
+func handleTemperature(rxPL models.RXPayload) {
 	tempint := binary.LittleEndian.Uint32(rxPL.Data)
 	tempFloat := math.Float32frombits(tempint)
 	log.Printf("temperature: %f", tempFloat)
-
-	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
-		Database:  "sensors",
-		Precision: "s",
-	})
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	tags := map[string]string{"devEUI": rxPL.DevEUI.String()}
-	fields := map[string]interface{}{
-		"celcius": tempFloat,
-	}
-	pt, err := client.NewPoint("temperature", tags, fields, time.Now())
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	bp.AddPoint(pt)
-
-	if err := influxClient.Write(bp); err != nil {
-		log.Println(err)
-	}
+	temp.Set(float64(tempFloat))
 }
 
 func main() {
@@ -154,16 +111,6 @@ func main() {
 			Value:  "http://localhost:8086",
 			Usage:  "InfluxDB URL",
 			EnvVar: "INFLUX_URL",
-		},
-		cli.StringFlag{
-			Name:   "influx-user",
-			Usage:  "InfluxDB user",
-			EnvVar: "INFLUX_USER",
-		},
-		cli.StringFlag{
-			Name:   "influx-password",
-			Usage:  "InfluxDB password",
-			EnvVar: "INFLUX_PASSWORD",
 		},
 	}
 	app.Run(os.Args)
