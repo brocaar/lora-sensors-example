@@ -15,15 +15,15 @@ import (
 )
 
 var (
-	temp = prometheus.NewGauge(prometheus.GaugeOpts{
+	temp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lora_sensor_temperature_celsius",
 		Help: "Current temperature in C",
-	})
+	}, []string{"dev_eui"})
 
-	airq = prometheus.NewGauge(prometheus.GaugeOpts{
+	airq = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "lora_sensor_airquality",
 		Help: "Current air quality",
-	})
+	}, []string{"dev_eui"})
 )
 
 func init() {
@@ -74,7 +74,7 @@ func onData(c mqtt.Client, msg mqtt.Message) {
 func handleAirQuality(rxPL models.RXPayload) {
 	quality := binary.LittleEndian.Uint16(rxPL.Data)
 	log.Printf("air-quality: %d", quality)
-	airq.Set(float64(quality))
+	airq.WithLabelValues(rxPL.DevEUI.String()).Set(float64(quality))
 
 }
 
@@ -82,7 +82,7 @@ func handleTemperature(rxPL models.RXPayload) {
 	tempint := binary.LittleEndian.Uint32(rxPL.Data)
 	tempFloat := math.Float32frombits(tempint)
 	log.Printf("temperature: %f", tempFloat)
-	temp.Set(float64(tempFloat))
+	temp.WithLabelValues(rxPL.DevEUI.String()).Set(float64(tempFloat))
 }
 
 func main() {
